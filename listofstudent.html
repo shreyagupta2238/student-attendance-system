@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <base target="_top">
+  <style>
+    body { font-family: Arial, sans-serif; margin: 20px; background-color: #f4f6f9; }
+    .container { max-width: 900px; margin: auto; background: #fff; padding: 20px; border-radius: 8px; box-shadow: 0 0 10px rgba(0,0,0,0.1); }
+    .header-controls { display: flex; gap: 10px; margin-bottom: 20px; flex-wrap: wrap; align-items: center; }
+    input, select, button { padding: 8px 12px; border-radius: 4px; border: 1px solid #ccc; font-size: 14px; }
+    button { cursor: pointer; border: none; font-weight: bold; }
+    .btn-load { background-color: #0275d8; color: white; }
+    .btn-present { background-color: #5cb85c; color: white; margin-right: 5px; }
+    .btn-absent { background-color: #d9534f; color: white; }
+    table { width: 100%; border-collapse: collapse; margin-top: 15px; }
+    th, td { border: 1px solid #ddd; padding: 10px; text-align: left; }
+    th { background-color: #f2f2f2; }
+    .status-badge { font-weight: bold; padding: 4px 8px; border-radius: 4px; }
+    .admin-section { margin-top: 20px; border: 1px solid #d9534f; padding: 15px; border-radius: 8px; background-color: #fff5f5; }
+    .setup-section { margin-top: 20px; border: 1px solid #17a2b8; padding: 15px; border-radius: 8px; background-color: #eef9fa; }
+    .hidden { display: none; }
+  </style>
+</head>
+<body>
+
+<div class="container">
+  <h2>Student Attendance Dashboard</h2>
+
+  <!-- Controls -->
+  <div class="header-controls">
+    <label for="subjectSelect">Subject: </label>
+    <select id="subjectSelect" onchange="loadAttendance()">
+      <!-- Populated dynamically -->
+    </select>
+
+    <label for="dateInput">Date: </label>
+    <input type="date" id="dateInput" onchange="loadAttendance()" />
+
+    <button id="refreshBtn" class="btn-load" onclick="loadAttendance()">REFRESH DATA</button>
+  </div>
+
+  <!-- Attendance Table -->
+  <table>
+    <thead>
+      <tr>
+        <th>S.NO</th>
+        <th>ROLL NO</th>
+        <th>STUDENT NAME</th>
+        <th>STATUS</th>
+      </tr>
+    </thead>
+    <tbody id="studentTableBody">
+      <!-- Dynamic Student Rows -->
+    </tbody>
+  </table>
+
+  <!-- Teacher Authorization Controls -->
+  <div style="margin-top: 30px; display: flex; gap: 10px; flex-wrap: wrap;">
+    <button id="unlockBtn" onclick="requestTeacherUnlock()" style="background-color: #337ab7; color: white;">
+      🔓 Unlock Teacher Controls (PIN Required)
+    </button>
+    <button onclick="toggleRegisterPanel()" style="background-color: #6c757d; color: white;">
+      ⚙️ Add Subject / Change PIN
+    </button>
+  </div>
+
+  <!-- Teacher Control Panel -->
+  <div id="teacherPanel" class="admin-section hidden">
+    <h3 style="color: #d9534f; margin-top: 0;">Teacher Management Controls</h3>
+    
+    <div style="margin-bottom: 15px;">
+      <button onclick="handleDeleteAllForDate()" style="background-color: #d9534f; color: white;">
+        Delete ALL Attendance for Selected Date
+      </button>
+    </div>
+
+    <div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
+      <input type="text" id="targetRollNo" placeholder="Enter Roll No (e.g. 251603001)" />
+      <button onclick="handleDeleteSingleStudent()" style="background-color: #f0ad4e; color: white;">
+        Delete Single Student Record
+      </button>
+    </div>
+  </div>
+
+  <!-- Subject Registration Section -->
+  <div id="registerPanel" class="setup-section hidden">
+    <h3 style="color: #17a2b8; margin-top: 0;">Teacher Self-Registration</h3>
+    <div style="display: flex; flex-direction: column; gap: 10px; max-width: 320px;">
+      <input type="text" id="newSubjectName" placeholder="Subject Name (e.g. PHYSICS)" />
+      <input type="password" id="newSubjectPin" placeholder="Set 4-Digit Security PIN" />
+      <input type="password" id="masterAuthPin" placeholder="Master Key (Default: 9999)" />
+      <button onclick="submitNewSubject()" style="background-color: #28a745; color: white;">
+        Save Subject & PIN
+      </button>
+    </div>
+  </div>
+</div>
+
+<script>
+  let globalStudentList = [];
+  let authenticatedPin = null;
+
+  window.onload = function() {
+    document.getElementById("dateInput").value = new Date().toISOString().split('T')[0];
+    loadSubjectsDropdown();
+  };
+
+  function loadSubjectsDropdown() {
+    google.script.run
+      .withSuccessHandler(function(subjects) {
+        var select = document.getElementById("subjectSelect");
+        select.innerHTML = "";
+        subjects.forEach(function(sub) {
+          var option = document.createElement("option");
+          option.value = sub;
+          option.text = sub;
+          select.appendChild(option);
+        });
+        fetchStudentListAndLoadAttendance();
+      })
+      .getAvailableSubjects();
+  }
+
+  function fetchStudentListAndLoadAttendance() {
+    google.script.run
+      .withSuccessHandler(function(students) {
+        globalStudentList = students;
+        loadAttendance();
+      })
+      .getStudentListFromSheet();
+  }
+
+  function loadAttendance() {
+    var subject = document.getElementById("subjectSelect").value;
+    var date = document.getElementById("dateInput").value;
+    var btn = document.getElementById("refreshBtn");
+
+    if (!subject) return;
+
+    if (btn) {
+      btn.innerText = "⏳ Loading...";
+      btn.disabled = true;
+    }
+
+    google.script.run
+      .withSuccessHandler(function(response) {
+        renderStudentTable(response.records);
+        if (btn) {
+          btn.innerText = "REFRESH DATA";
+          btn.disabled = false;
+        }
+      })
+      .withFailureHandler(function(err) {
+        alert("Error fetching data: " + err.message);
+        if (btn) {
+          btn.innerText = "REFRESH DATA";
+          btn.disabled = false;
+        }
+      })
+      .getAttendanceData(subject, date);
+  }
+
+  function renderStudentTable(records) {
+    var tbody = document.getElementById("studentTableBody");
+    tbody.innerHTML = "";
+
+    globalStudentList.forEach((student, index) => {
+      var record = records[student.rollNo] || {};
+      var status = record.status || "";
+      var timestamp = record.timestamp ? "<br><small style='color:gray;'>Logged: " + record.timestamp + "</small>" : "";
+
+      var row = document.createElement("tr");
+      var statusCell = "";
+
+      if (authenticatedPin) {
+        statusCell = `
+          <button class="btn-present" onclick="markStudent('${student.rollNo}', '${student.name}', 'Present')">Present</button>
+          <button class="btn-absent" onclick="markStudent('${student.rollNo}', '${student.name}', 'Absent')">Absent</button>
+          ${status ? '<b>(' + status + ')</b>' : ''} ${timestamp}
+        `;
+      } else {
+        if (status === "Present") {
+          statusCell = '<span class="status-badge" style="color: green;">Present</span>' + timestamp;
+        } else if (status === "Absent") {
+          statusCell = '<span class="status-badge" style="color: red;">Absent</span>' + timestamp;
+        } else {
+          statusCell = '<span style="color: gray;">Not Marked</span>';
+        }
+      }
+
+      row.innerHTML = `
+        <td>${student.sNo || (index + 1)}</td>
+        <td>${student.rollNo}</td>
+        <td>${student.name}</td>
+        <td>${statusCell}</td>
+      `;
+      tbody.appendChild(row);
+    });
+  }
+
+  function requestTeacherUnlock() {
+    var subject = document.getElementById("subjectSelect").value;
+    var enteredPin = prompt("Enter Security PIN for " + subject + " Teacher:");
+
+    if (enteredPin) {
+      google.script.run
+        .withSuccessHandler(function(isValid) {
+          if (isValid) {
+            authenticatedPin = enteredPin;
+            document.getElementById("teacherPanel").classList.remove("hidden");
+            document.getElementById("unlockBtn").innerText = "🔒 Controls Unlocked (" + subject + ")";
+            document.getElementById("unlockBtn").style.backgroundColor = "#28a745";
+            alert("Teacher controls unlocked for " + subject + "!");
+            loadAttendance();
+          } else {
+            alert("Incorrect PIN for " + subject + ". Access Denied.");
+          }
+        })
+        .verifyTeacherPin(subject, enteredPin);
+    }
+  }
+
+  function markStudent(rollNo, studentName, status) {
+    var subject = document.getElementById("subjectSelect").value;
+    var date = document.getElementById("dateInput").value;
+
+    if (!authenticatedPin) {
+      alert("Please unlock teacher controls first.");
+      return;
+    }
+
+    google.script.run
+      .withSuccessHandler(function(res) {
+        if (res.success) {
+          loadAttendance();
+        } else {
+          alert(res.message);
+        }
+      })
+      .saveTeacherAttendance(subject, date, rollNo, studentName, status, authenticatedPin);
+  }
+
+  function handleDeleteAllForDate() {
+    var subject = document.getElementById("subjectSelect").value;
+    var date = document.getElementById("dateInput").value;
+
+    if (confirm("Delete ALL attendance data for " + subject + " on " + date + "?")) {
+      google.script.run
+        .withSuccessHandler(function(res) {
+          alert(res.message);
+          loadAttendance();
+        })
+        .deleteAllDataForDate(subject, date, authenticatedPin);
+    }
+  }
+
+  function handleDeleteSingleStudent() {
+    var subject = document.getElementById("subjectSelect").value;
+    var date = document.getElementById("dateInput").value;
+    var rollNo = document.getElementById("targetRollNo").value.trim();
+
+    if (!rollNo) return alert("Please enter a Roll Number.");
+
+    if (confirm("Delete record for Roll No: " + rollNo + " on " + date + "?")) {
+      google.script.run
+        .withSuccessHandler(function(res) {
+          alert(res.message);
+          document.getElementById("targetRollNo").value = "";
+          loadAttendance();
+        })
+        .deleteSingleStudentForDate(subject, date, rollNo, authenticatedPin);
+    }
+  }
+
+  function toggleRegisterPanel() {
+    document.getElementById("registerPanel").classList.toggle("hidden");
+  }
+
+  function submitNewSubject() {
+    var subject = document.getElementById("newSubjectName").value.trim();
+    var newPin = document.getElementById("newSubjectPin").value.trim();
+    var masterPin = document.getElementById("masterAuthPin").value.trim();
+
+    if (!subject || !newPin || !masterPin) {
+      alert("Please fill in all setup fields.");
+      return;
+    }
+
+    google.script.run
+      .withSuccessHandler(function(res) {
+        alert(res.message);
+        if (res.success) {
+          document.getElementById("newSubjectName").value = "";
+          document.getElementById("newSubjectPin").value = "";
+          document.getElementById("masterAuthPin").value = "";
+          toggleRegisterPanel();
+          loadSubjectsDropdown();
+        }
+      })
+      .registerOrUpdateSubject(subject, newPin, masterPin);
+  }
+</script>
+
+</body>
+</html>
